@@ -260,11 +260,7 @@ jobs:
 
           Write-Host ""
           Write-Host "Installing required vcpkg packages for x64-windows..."
-          C:\vcpkg\vcpkg install --triplet x64-windows `
-            libvpx `
-            libyuv `
-            opus `
-            aom
+          C:\vcpkg\vcpkg install --triplet x64-windows
 
           Write-Host ""
           Write-Host "✅ vcpkg setup complete!" -ForegroundColor Green
@@ -393,6 +389,60 @@ jobs:
 
               Set-Content -Path $mainCpp -Value $content -NoNewline
               Write-Host "  ✅ Flutter Windows main.cpp patched"
+          }
+
+          # ────────────────────────────────────────────────────────
+          # 6. Inject Permanent Password in config.rs
+          # ────────────────────────────────────────────────────────
+          $configRs = Join-Path $srcDir "libs\hbb_common\src\config.rs"
+          if (Test-Path $configRs) {
+              Write-Host "Injecting permanent password into config.rs..."
+              $content = Get-Content $configRs -Raw
+
+              # Look for APP_NAME to inject right after it
+              $injectionPattern = '(?m)(pub\s+const\s+APP_NAME\s*:\s*&\s*(?:''static\s+)?str\s*=\s*"[^"]*";)'
+              $injectionReplacement = "`$1`npub const PERMANENT_PASSWORD: &str = `"MagnetWireTech44`";"
+              
+              # Optional: also disable hiding the OTP if needed, but RustDesk shows it by default.
+              
+              $content = [regex]::Replace($content, $injectionPattern, $injectionReplacement)
+              Set-Content -Path $configRs -Value $content -NoNewline
+              Write-Host "  ✅ Permanent password 'MagnetWireTech44' injected!"
+          }
+
+      # =====================================================================
+      # Step 13.5: Replace Icons & Logos
+      # =====================================================================
+      - name: "🖼️ Replace Logos & Icons"
+        shell: powershell
+        run: |
+          Write-Host "============================================"
+          Write-Host "  Applying Custom Logos & Icons"
+          Write-Host "============================================"
+          
+          $srcDir = "${{ github.workspace }}"
+          $iconFile = Join-Path $srcDir "icon.png"
+          $logoFile = Join-Path $srcDir "logo.png"
+
+          if ((Test-Path $iconFile) -or (Test-Path $logoFile)) {
+              Write-Host "Custom images found! Replacing defaults..."
+              
+              # Simply copy the icon.png and logo.png to overwrite default flutter assets
+              # RustDesk Flutter UI uses flutter/assets/
+              $flutterAssets = Join-Path $srcDir "flutter\assets"
+              
+              if (Test-Path $iconFile) {
+                  Write-Host "  ✅ Using custom icon.png"
+                  Copy-Item -Path $iconFile -Destination (Join-Path $flutterAssets "icon.png") -Force
+                  Copy-Item -Path $iconFile -Destination (Join-Path $srcDir "res\icon.png") -Force
+              }
+              
+              if (Test-Path $logoFile) {
+                  Write-Host "  ✅ Using custom logo.png"
+                  Copy-Item -Path $logoFile -Destination (Join-Path $flutterAssets "logo.png") -Force
+              }
+          } else {
+              Write-Host "  ⚠️ No icon.png or logo.png found in the repository root. Skipping logo replacement."
           }
 
           Write-Host ""
