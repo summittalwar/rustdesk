@@ -71,7 +71,7 @@ env:
 
   # ── vcpkg Configuration ──
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  VCPKG_COMMIT_ID: "501db0f17ef6571c29571f0048895f4251e4e071"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
 
   # ── MWT-Support Branding ──
   APP_NAME: "MWT-Support"
