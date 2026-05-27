@@ -91,7 +91,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────────
   build-windows-x64:
     name: "Build MWT-Support (Windows x64)"
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     # ── Default shell for all steps ──
     defaults:
