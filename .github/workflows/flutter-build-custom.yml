@@ -1,0 +1,541 @@
+# =============================================================================
+# MWT-Support Custom RustDesk Client - GitHub Actions Build Workflow
+# =============================================================================
+#
+# This workflow builds a custom-branded RustDesk client for Windows x64.
+# It applies MWT-Support branding, injects server configuration from
+# GitHub Secrets, and produces a portable .exe artifact.
+#
+# REQUIRED GITHUB SECRETS:
+#   - RENDEZVOUS_SERVER : Your RustDesk ID/rendezvous server address
+#                         Example: "your-server.example.com"
+#   - RS_PUB_KEY        : Your RustDesk server's public key
+#                         Example: "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw="
+#   - RELAY_SERVER      : Your RustDesk relay server address
+#                         Example: "your-server.example.com"
+#
+# OPTIONAL GITHUB SECRETS:
+#   - UPLOAD_ARTIFACT   : Set to "true" to upload artifacts (default: true)
+#   - SIGN_BASE_URL     : Code signing service URL (if using)
+#
+# Based on RustDesk's official flutter-build.yml, stripped down to
+# Windows x64 only for faster, focused builds.
+# =============================================================================
+
+name: MWT-Support Windows x64 Build
+
+on:
+  # ── Trigger on push to main or custom-build branch ──
+  push:
+    branches:
+      - main
+      - custom-build
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+
+  # ── Allow manual triggering from GitHub Actions UI ──
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Build type (release or debug)"
+        required: false
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+
+# ── Prevent concurrent builds on the same branch ──
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+env:
+  # ── Rust Configuration ──
+  RUST_VERSION: "1.75.0"
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+
+  # ── Flutter Configuration ──
+  FLUTTER_VERSION: "3.19.6"
+  FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
+
+  # ── LLVM / Clang ──
+  LLVM_VERSION: "15.0.6"
+
+  # ── vcpkg Configuration ──
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "501db0f17ef6571c29571f0048895f4251e4e071"
+
+  # ── MWT-Support Branding ──
+  APP_NAME: "MWT-Support"
+  SCITER_NOT_USED: "true"
+
+  # ── Server Configuration (injected from GitHub Secrets) ──
+  RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+  RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+  RELAY_SERVER: ${{ secrets.RELAY_SERVER }}
+
+# =============================================================================
+# Jobs
+# =============================================================================
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job: Build Windows x64
+  # ───────────────────────────────────────────────────────────────────────────
+  build-windows-x64:
+    name: "Build MWT-Support (Windows x64)"
+    runs-on: windows-latest
+
+    # ── Default shell for all steps ──
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      # =====================================================================
+      # Step 1: Checkout the repository
+      # =====================================================================
+      - name: "📥 Checkout Repository"
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # =====================================================================
+      # Step 2: Validate that required secrets are set
+      # =====================================================================
+      - name: "🔐 Validate GitHub Secrets"
+        shell: powershell
+        run: |
+          Write-Host "============================================"
+          Write-Host "  Validating Required GitHub Secrets"
+          Write-Host "============================================"
+
+          $errors = @()
+
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.RENDEZVOUS_SERVER }}")) {
+              $errors += "RENDEZVOUS_SERVER secret is not set!"
+          } else {
+              Write-Host "✅ RENDEZVOUS_SERVER is configured"
+          }
+
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.RS_PUB_KEY }}")) {
+              $errors += "RS_PUB_KEY secret is not set!"
+          } else {
+              Write-Host "✅ RS_PUB_KEY is configured"
+          }
+
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.RELAY_SERVER }}")) {
+              $errors += "RELAY_SERVER secret is not set!"
+          } else {
+              Write-Host "✅ RELAY_SERVER is configured"
+          }
+
+          if ($errors.Count -gt 0) {
+              Write-Host ""
+              Write-Host "❌ ERRORS:" -ForegroundColor Red
+              foreach ($err in $errors) {
+                  Write-Host "   - $err" -ForegroundColor Red
+              }
+              Write-Host ""
+              Write-Host "Please add the missing secrets in:"
+              Write-Host "  Repository Settings → Secrets and variables → Actions"
+              exit 1
+          }
+
+          Write-Host ""
+          Write-Host "✅ All required secrets are configured!" -ForegroundColor Green
+
+      # =====================================================================
+      # Step 3: Setup vcpkg caching via GitHub Actions cache
+      # =====================================================================
+      - name: "📦 Setup vcpkg Cache (GitHub Actions)"
+        uses: actions/github-script@v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      # =====================================================================
+      # Step 4: Cache Rust toolchain and cargo registry
+      # =====================================================================
+      - name: "🦀 Cache Rust Toolchain & Cargo"
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+
+      # =====================================================================
+      # Step 5: Cache Flutter SDK
+      # =====================================================================
+      - name: "🐦 Cache Flutter SDK"
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\hostedtoolcache\flutter
+          key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-
+
+      # =====================================================================
+      # Step 6: Cache vcpkg installed packages
+      # =====================================================================
+      - name: "📦 Cache vcpkg Packages"
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: ${{ runner.os }}-vcpkg-${{ env.VCPKG_COMMIT_ID }}-x64-windows
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ env.VCPKG_COMMIT_ID }}-
+            ${{ runner.os }}-vcpkg-
+
+      # =====================================================================
+      # Step 7: Install Rust toolchain
+      # =====================================================================
+      - name: "🦀 Install Rust ${{ env.RUST_VERSION }}"
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      # =====================================================================
+      # Step 8: Install Flutter SDK
+      # =====================================================================
+      - name: "🐦 Install Flutter ${{ env.FLUTTER_VERSION }}"
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      # =====================================================================
+      # Step 9: Install LLVM/Clang (required for bindgen / native compilation)
+      # =====================================================================
+      - name: "⚙️ Install LLVM ${{ env.LLVM_VERSION }}"
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      # =====================================================================
+      # Step 10: Setup vcpkg and install required C/C++ libraries
+      # =====================================================================
+      - name: "📦 Setup vcpkg & Install Dependencies"
+        shell: powershell
+        run: |
+          Write-Host "============================================"
+          Write-Host "  Setting up vcpkg"
+          Write-Host "============================================"
+
+          # Clone or update vcpkg
+          if (!(Test-Path "C:\vcpkg")) {
+              git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+          }
+
+          Push-Location C:\vcpkg
+          git fetch
+          git checkout $env:VCPKG_COMMIT_ID
+          .\bootstrap-vcpkg.bat
+          Pop-Location
+
+          # Set environment for subsequent steps
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+          Write-Host ""
+          Write-Host "Installing required vcpkg packages for x64-windows..."
+          C:\vcpkg\vcpkg install --triplet x64-windows `
+            libvpx `
+            libyuv `
+            opus `
+            aom
+
+          Write-Host ""
+          Write-Host "✅ vcpkg setup complete!" -ForegroundColor Green
+
+      # =====================================================================
+      # Step 11: Install additional build tools (Python, NASM, etc.)
+      # =====================================================================
+      - name: "🔧 Install Build Tools"
+        shell: powershell
+        run: |
+          Write-Host "Installing additional build tools..."
+
+          # Install NASM (needed for some native codecs)
+          choco install nasm -y --no-progress
+          echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
+
+          # Ensure Python is available (usually pre-installed on windows-latest)
+          python --version
+
+          Write-Host "✅ Build tools installed!" -ForegroundColor Green
+
+      # =====================================================================
+      # Step 12: Install flutter_rust_bridge_codegen
+      # =====================================================================
+      - name: "🌉 Install flutter_rust_bridge_codegen"
+        shell: powershell
+        run: |
+          Write-Host "Installing flutter_rust_bridge_codegen v$env:FLUTTER_RUST_BRIDGE_VERSION..."
+          cargo install flutter_rust_bridge_codegen --version $env:FLUTTER_RUST_BRIDGE_VERSION --features uuid
+          Write-Host "✅ flutter_rust_bridge_codegen installed!" -ForegroundColor Green
+
+      # =====================================================================
+      # Step 13: Apply MWT-Support Branding & Server Configuration
+      #
+      # This is the KEY STEP that customizes the RustDesk source code
+      # with MWT-Support branding and your server settings.
+      # =====================================================================
+      - name: "🎨 Apply MWT-Support Customizations"
+        shell: powershell
+        run: |
+          Write-Host "============================================"
+          Write-Host "  Applying MWT-Support Customizations"
+          Write-Host "============================================"
+
+          # ── Paths to key configuration files ──
+          $srcDir      = "${{ github.workspace }}"
+          $mainRs      = Join-Path $srcDir "src\main.rs"
+          $cargoToml   = Join-Path $srcDir "Cargo.toml"
+          $pubspec     = Join-Path $srcDir "flutter\pubspec.yaml"
+
+          # ────────────────────────────────────────────────────────
+          # 1. Modify src/common.rs — Inject server configuration
+          # ────────────────────────────────────────────────────────
+          $commonRs = Join-Path $srcDir "src\common.rs"
+          if (Test-Path $commonRs) {
+              Write-Host "Patching src/common.rs with server settings..."
+              $content = Get-Content $commonRs -Raw
+
+              # Set APP_NAME
+              $content = $content -replace 'pub const APP_NAME: &str = "RustDesk"', `
+                                            'pub const APP_NAME: &str = "MWT-Support"'
+
+              Set-Content -Path $commonRs -Value $content -NoNewline
+              Write-Host "  ✅ src/common.rs patched"
+          } else {
+              Write-Host "  ⚠️ src/common.rs not found, skipping..."
+          }
+
+          # ────────────────────────────────────────────────────────
+          # 2. Create/update custom configuration file for hardcoded
+          #    server settings. RustDesk reads from a TOML config or
+          #    embedded defaults.
+          # ────────────────────────────────────────────────────────
+          $customConfigDir = Join-Path $srcDir "src"
+          $customConfigFile = Join-Path $customConfigDir "custom.txt"
+
+          Write-Host "Creating hardcoded server config at $customConfigFile..."
+
+          @"
+          rendezvous_server = ${{ secrets.RENDEZVOUS_SERVER }}
+          key = ${{ secrets.RS_PUB_KEY }}
+          relay-server = ${{ secrets.RELAY_SERVER }}
+          api-server =
+          "@ | Set-Content -Path $customConfigFile
+
+          Write-Host "  ✅ Custom server config created"
+
+          # ────────────────────────────────────────────────────────
+          # 3. Modify Cargo.toml — Update package name
+          # ────────────────────────────────────────────────────────
+          if (Test-Path $cargoToml) {
+              Write-Host "Patching Cargo.toml..."
+              $content = Get-Content $cargoToml -Raw
+
+              # Update the package name (used in binary name)
+              $content = $content -replace 'name = "rustdesk"', 'name = "mwt-support"'
+
+              Set-Content -Path $cargoToml -Value $content -NoNewline
+              Write-Host "  ✅ Cargo.toml patched"
+          }
+
+          # ────────────────────────────────────────────────────────
+          # 4. Modify Flutter pubspec.yaml — Update app display name
+          # ────────────────────────────────────────────────────────
+          if (Test-Path $pubspec) {
+              Write-Host "Patching flutter/pubspec.yaml..."
+              $content = Get-Content $pubspec -Raw
+
+              $content = $content -replace 'name: rustdesk', 'name: mwt_support'
+              $content = $content -replace 'description: RustDesk', 'description: MWT-Support'
+
+              Set-Content -Path $pubspec -Value $content -NoNewline
+              Write-Host "  ✅ flutter/pubspec.yaml patched"
+          }
+
+          # ────────────────────────────────────────────────────────
+          # 5. Modify Flutter window title
+          # ────────────────────────────────────────────────────────
+          $windowRunnerDir = Join-Path $srcDir "flutter\windows\runner"
+          $mainCpp = Join-Path $windowRunnerDir "main.cpp"
+          if (Test-Path $mainCpp) {
+              Write-Host "Patching Flutter Windows runner main.cpp..."
+              $content = Get-Content $mainCpp -Raw
+
+              $content = $content -replace 'RustDesk', 'MWT-Support'
+
+              Set-Content -Path $mainCpp -Value $content -NoNewline
+              Write-Host "  ✅ Flutter Windows main.cpp patched"
+          }
+
+          Write-Host ""
+          Write-Host "============================================"
+          Write-Host "  ✅ All customizations applied!"
+          Write-Host "============================================"
+          Write-Host ""
+          Write-Host "  App Name   : MWT-Support"
+          Write-Host "  ID Server  : ${{ secrets.RENDEZVOUS_SERVER }}"
+          Write-Host "  Relay      : ${{ secrets.RELAY_SERVER }}"
+          Write-Host "  Public Key : [REDACTED - set via secret]"
+
+      # =====================================================================
+      # Step 14: Build the Flutter desktop app with Rust backend
+      #
+      # Uses the official RustDesk build.py script which orchestrates:
+      #   - Rust compilation (native backend)
+      #   - Flutter build (UI frontend)
+      #   - Bundling into a portable .exe
+      # =====================================================================
+      - name: "🔨 Build MWT-Support (Windows x64 Portable)"
+        shell: powershell
+        env:
+          VCPKG_ROOT: "C:\\vcpkg"
+        run: |
+          Write-Host "============================================"
+          Write-Host "  Building MWT-Support"
+          Write-Host "============================================"
+          Write-Host ""
+          Write-Host "Build command: python build.py --flutter --portable --hwcodec"
+          Write-Host "Target:        Windows x64"
+          Write-Host "Type:          Portable executable"
+          Write-Host ""
+
+          # Set the target triple for Windows x64
+          $env:RUST_TARGET = "x86_64-pc-windows-msvc"
+
+          # Navigate to repo root and run the build
+          Push-Location "${{ github.workspace }}"
+
+          python build.py --flutter --portable --hwcodec
+
+          $buildExitCode = $LASTEXITCODE
+          Pop-Location
+
+          if ($buildExitCode -ne 0) {
+              Write-Host ""
+              Write-Host "❌ Build FAILED with exit code: $buildExitCode" -ForegroundColor Red
+              exit $buildExitCode
+          }
+
+          Write-Host ""
+          Write-Host "✅ Build completed successfully!" -ForegroundColor Green
+
+      # =====================================================================
+      # Step 15: Locate and prepare the built artifact
+      # =====================================================================
+      - name: "📋 Locate Built Artifacts"
+        id: locate_artifacts
+        shell: powershell
+        run: |
+          Write-Host "Searching for built artifacts..."
+
+          # Common output locations for RustDesk builds
+          $searchPaths = @(
+              "${{ github.workspace }}\flutter\build\windows\x64\runner\Release",
+              "${{ github.workspace }}\flutter\build\windows\runner\Release",
+              "${{ github.workspace }}\target\release",
+              "${{ github.workspace }}\build"
+          )
+
+          $foundExe = $null
+
+          foreach ($path in $searchPaths) {
+              Write-Host "  Checking: $path"
+              if (Test-Path $path) {
+                  # Look for the built executable
+                  $exeFiles = Get-ChildItem -Path $path -Filter "*.exe" -ErrorAction SilentlyContinue
+                  if ($exeFiles) {
+                      foreach ($exe in $exeFiles) {
+                          Write-Host "  ✅ Found: $($exe.FullName) ($([math]::Round($exe.Length / 1MB, 2)) MB)"
+                          if ($null -eq $foundExe) {
+                              $foundExe = $exe.FullName
+                          }
+                      }
+                  }
+              }
+          }
+
+          if ($null -eq $foundExe) {
+              Write-Host ""
+              Write-Host "❌ No .exe artifact found!" -ForegroundColor Red
+              Write-Host "Listing all files in flutter build directory:"
+              Get-ChildItem -Path "${{ github.workspace }}\flutter\build" -Recurse -ErrorAction SilentlyContinue | `
+                  ForEach-Object { Write-Host "  $($_.FullName)" }
+              exit 1
+          }
+
+          # Set the artifact path for the upload step
+          $artifactDir = Split-Path $foundExe -Parent
+          echo "ARTIFACT_DIR=$artifactDir" >> $env:GITHUB_OUTPUT
+          echo "ARTIFACT_EXE=$foundExe" >> $env:GITHUB_OUTPUT
+
+          Write-Host ""
+          Write-Host "Artifact directory: $artifactDir"
+          Write-Host "Primary executable: $foundExe"
+
+      # =====================================================================
+      # Step 16: Upload the built executable as a GitHub Actions artifact
+      #
+      # The artifact will be downloadable from the Actions tab in GitHub.
+      # Retention is set to 30 days by default.
+      # =====================================================================
+      - name: "📤 Upload MWT-Support Windows x64 Artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: MWT-Support-Windows-x64
+          path: ${{ steps.locate_artifacts.outputs.ARTIFACT_DIR }}
+          retention-days: 30
+          if-no-files-found: error
+
+      # =====================================================================
+      # Step 17: Build summary
+      # =====================================================================
+      - name: "📊 Build Summary"
+        if: always()
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "============================================================"
+          Write-Host "  MWT-Support Build Summary"
+          Write-Host "============================================================"
+          Write-Host ""
+          Write-Host "  Workflow    : ${{ github.workflow }}"
+          Write-Host "  Run ID      : ${{ github.run_id }}"
+          Write-Host "  Branch      : ${{ github.ref_name }}"
+          Write-Host "  Commit      : ${{ github.sha }}"
+          Write-Host "  Trigger     : ${{ github.event_name }}"
+          Write-Host "  Runner      : ${{ runner.os }} (${{ runner.arch }})"
+          Write-Host "  Rust        : ${{ env.RUST_VERSION }}"
+          Write-Host "  Flutter     : ${{ env.FLUTTER_VERSION }}"
+          Write-Host ""
+          Write-Host "  Artifact    : MWT-Support-Windows-x64"
+          Write-Host "  Download from: Actions tab → This workflow run → Artifacts"
+          Write-Host ""
+          Write-Host "============================================================"
