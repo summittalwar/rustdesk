@@ -235,7 +235,24 @@ jobs:
           version: ${{ env.LLVM_VERSION }}
 
       # =====================================================================
-      # Step 10: Setup vcpkg and install required C/C++ libraries
+      # Step 10: Install additional build tools (Python, NASM, etc.)
+      # =====================================================================
+      - name: "🔧 Install Build Tools"
+        shell: powershell
+        run: |
+          Write-Host "Installing additional build tools..."
+
+          # Install NASM (needed for some native codecs)
+          choco install nasm -y --no-progress
+          echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
+
+          # Ensure Python is available (usually pre-installed on windows-latest)
+          python --version
+
+          Write-Host "✅ Build tools installed!" -ForegroundColor Green
+
+      # =====================================================================
+      # Step 11: Setup vcpkg and install required C/C++ libraries
       # =====================================================================
       - name: "📦 Setup vcpkg & Install Dependencies"
         shell: powershell
@@ -264,23 +281,6 @@ jobs:
 
           Write-Host ""
           Write-Host "✅ vcpkg setup complete!" -ForegroundColor Green
-
-      # =====================================================================
-      # Step 11: Install additional build tools (Python, NASM, etc.)
-      # =====================================================================
-      - name: "🔧 Install Build Tools"
-        shell: powershell
-        run: |
-          Write-Host "Installing additional build tools..."
-
-          # Install NASM (needed for some native codecs)
-          choco install nasm -y --no-progress
-          echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
-
-          # Ensure Python is available (usually pre-installed on windows-latest)
-          python --version
-
-          Write-Host "✅ Build tools installed!" -ForegroundColor Green
 
       # =====================================================================
       # Step 12: Install flutter_rust_bridge_codegen
