@@ -289,7 +289,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Installing flutter_rust_bridge_codegen v$env:FLUTTER_RUST_BRIDGE_VERSION..."
-          cargo install flutter_rust_bridge_codegen --version $env:FLUTTER_RUST_BRIDGE_VERSION --features uuid
+          cargo install flutter_rust_bridge_codegen --version $env:FLUTTER_RUST_BRIDGE_VERSION --features uuid --locked
           Write-Host "✅ flutter_rust_bridge_codegen installed!" -ForegroundColor Green
 
       # =====================================================================
